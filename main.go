@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"embed"
 	"log"
@@ -20,6 +21,11 @@ import (
 //go:embed templates/* env/*
 var f embed.FS
 
+var content string
+var clip string
+var template string
+var mode string
+
 func SetupENV() {
 
 	data, err := f.ReadFile("env/dev")
@@ -31,7 +37,7 @@ func SetupENV() {
 	viper.ReadConfig(strings.NewReader(string(data)))
 }
 
-func GetClient() *openai.Client {
+func GetClient(mode string) GuessWhatClient {
 
 	token := viper.Get("OPENAI_TOKEN").(string)
 	config := openai.DefaultConfig(token)
@@ -51,24 +57,116 @@ func GetClient() *openai.Client {
 	}
 
 	client := openai.NewClientWithConfig(config)
-	return client
 
+	switch mode {
+	case singleMode:
+		return &SingleClient{client: client}
+	case dialogMode:
+		return &DialogClient{client: client}
+	default:
+		return &TemplateClient{
+			client: client,
+		}
+	}
 }
 
-func gptRequest(client *openai.Client, content string) (response openai.ChatCompletionResponse, err error) {
-	resp, err := client.CreateChatCompletion(
+const (
+	singleMode   = "single"
+	templateMode = "template"
+	dialogMode   = "dialog"
+)
+
+type GuessWhatClient interface {
+	Work()
+}
+type SingleClient struct {
+	client *openai.Client
+}
+
+func (s *SingleClient) Work() {
+	reader := bufio.NewReader(os.Stdin)
+	text, _ := reader.ReadString('\n')
+	// convert CRLF to LF
+	text = strings.Replace(text, "\n", "", -1)
+	resp, _ := s.client.CreateChatCompletion(
 		context.Background(),
 		openai.ChatCompletionRequest{
 			Model: openai.GPT3Dot5Turbo,
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role:    openai.ChatMessageRoleUser,
-					Content: content,
+					Content: text,
 				},
 			},
 		},
 	)
-	return resp, err
+	content := resp.Choices[0].Message.Content
+	fmt.Println(content)
+}
+
+type DialogClient struct {
+	client *openai.Client
+}
+
+func (s *DialogClient) Work() {
+	messages := make([]openai.ChatCompletionMessage, 0)
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Println("Conversation")
+	fmt.Println("---------------------")
+
+	for {
+		fmt.Print("-> ")
+		text, _ := reader.ReadString('\n')
+		// convert CRLF to LF
+		text = strings.Replace(text, "\n", "", -1)
+		messages = append(messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: text,
+		})
+
+		resp, err := s.client.CreateChatCompletion(
+			context.Background(),
+			openai.ChatCompletionRequest{
+				Model:    openai.GPT3Dot5Turbo,
+				Messages: messages,
+			},
+		)
+
+		if err != nil {
+			fmt.Printf("ChatCompletion error: %v\n", err)
+			continue
+		}
+
+		content := resp.Choices[0].Message.Content
+		messages = append(messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleAssistant,
+			Content: content,
+		})
+		fmt.Println(content)
+	}
+}
+
+type TemplateClient struct {
+	client *openai.Client
+}
+
+func (s *TemplateClient) Work() {
+	temp := ReadTemplate(template)
+	formated_content := fmt.Sprintf(temp, content)
+	resp, _ := s.client.CreateChatCompletion(
+		context.Background(),
+		openai.ChatCompletionRequest{
+			Model: openai.GPT3Dot5Turbo,
+			Messages: []openai.ChatCompletionMessage{
+				{
+					Role:    openai.ChatMessageRoleUser,
+					Content: formated_content,
+				},
+			},
+		},
+	)
+	content := resp.Choices[0].Message.Content
+	fmt.Println(content)
 }
 
 func ReadTemplate(template string) string {
@@ -78,20 +176,10 @@ func ReadTemplate(template string) string {
 	return string(dat)
 }
 
-func run(content string, template string) {
+func run() {
 	SetupENV()
-	temp := ReadTemplate(template)
-	formated_content := fmt.Sprintf(temp, content)
-
-	client := GetClient()
-
-	resp, err := gptRequest(client, formated_content)
-
-	if err != nil {
-		fmt.Printf("ChatCompletion error: %v\n", err)
-		return
-	}
-	fmt.Println(resp.Choices[0].Message.Content)
+	client := GetClient(mode)
+	client.Work()
 }
 
 func check(e error) {
@@ -102,10 +190,6 @@ func check(e error) {
 
 func main() {
 
-	var content string
-	var clip string
-	var template string
-
 	app := &cli.App{
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -113,6 +197,12 @@ func main() {
 				Value:       "english",
 				Usage:       "content for ChatGPT",
 				Destination: &content,
+			},
+			&cli.StringFlag{
+				Name:        "mode",
+				Value:       "template",
+				Usage:       "single/template/dialog mode for chatting",
+				Destination: &mode,
 			},
 			&cli.StringFlag{
 				Name:        "template",
@@ -136,7 +226,7 @@ func main() {
 				content = string(clipboard.Read(clipboard.FmtText))
 			}
 			fmt.Printf("Your msg: %s\n", content)
-			run(content, template)
+			run()
 			return nil
 		},
 	}
