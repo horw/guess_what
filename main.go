@@ -14,6 +14,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 	"github.com/spf13/viper"
 	"github.com/urfave/cli/v2"
+	"golang.design/x/clipboard"
 )
 
 //go:embed templates/* env/*
@@ -102,6 +103,7 @@ func check(e error) {
 func main() {
 
 	var content string
+	var clip string
 	var template string
 
 	app := &cli.App{
@@ -118,8 +120,22 @@ func main() {
 				Usage:       "template for ChatGPT",
 				Destination: &template,
 			},
+			&cli.StringFlag{
+				Name:        "c",
+				Value:       "n",
+				Usage:       "use clipboard instead input? y/n. (defaut n)",
+				Destination: &clip,
+			},
 		},
 		Action: func(cCtx *cli.Context) error {
+			if clip == "y" {
+				err := clipboard.Init()
+				if err != nil {
+					panic(err)
+				}
+				content = string(clipboard.Read(clipboard.FmtText))
+			}
+			fmt.Printf("Your msg: %s\n", content)
 			run(content, template)
 			return nil
 		},
