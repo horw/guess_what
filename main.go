@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"embed"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 
 	"fmt"
 
@@ -14,14 +16,18 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+//go:embed templates/* env/*
+var f embed.FS
+
 func SetupENV() {
-	viper.SetConfigName("dev")
-	viper.SetConfigType("env")
-	viper.AddConfigPath("./env")
-	err := viper.ReadInConfig()
+
+	data, err := f.ReadFile("env/dev")
 	if err != nil {
-		panic(fmt.Errorf("fatal error config file: %w", err))
+		panic(fmt.Errorf("fatal error reading config file: %w", err))
 	}
+
+	viper.SetConfigType("env")
+	viper.ReadConfig(strings.NewReader(string(data)))
 }
 
 func GetClient() *openai.Client {
@@ -64,11 +70,21 @@ func gptRequest(client *openai.Client, content string) (response openai.ChatComp
 	return resp, err
 }
 
-func run(content string) {
+func ReadTemplate(template string) string {
+
+	dat, err := f.ReadFile(fmt.Sprintf("templates/%s", template))
+	check(err)
+	return string(dat)
+}
+
+func run(content string, template string) {
 	SetupENV()
+	temp := ReadTemplate(template)
+	formated_content := fmt.Sprintf(temp, content)
+
 	client := GetClient()
 
-	resp, err := gptRequest(client, content)
+	resp, err := gptRequest(client, formated_content)
 
 	if err != nil {
 		fmt.Printf("ChatCompletion error: %v\n", err)
@@ -77,9 +93,16 @@ func run(content string) {
 	fmt.Println(resp.Choices[0].Message.Content)
 }
 
+func check(e error) {
+	if e != nil {
+		panic(e)
+	}
+}
+
 func main() {
 
 	var content string
+	var template string
 
 	app := &cli.App{
 		Flags: []cli.Flag{
@@ -89,9 +112,15 @@ func main() {
 				Usage:       "content for ChatGPT",
 				Destination: &content,
 			},
+			&cli.StringFlag{
+				Name:        "template",
+				Value:       "check_grammar",
+				Usage:       "template for ChatGPT",
+				Destination: &template,
+			},
 		},
 		Action: func(cCtx *cli.Context) error {
-			run(content)
+			run(content, template)
 			return nil
 		},
 	}
