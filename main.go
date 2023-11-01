@@ -2,38 +2,53 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
 
+	"fmt"
+
 	openai "github.com/sashabaranov/go-openai"
 	"github.com/spf13/viper"
+	"github.com/urfave/cli/v2"
 )
 
-func main() {
-
-	viper.SetConfigName("dev")   // name of config file (without extension)
-	viper.SetConfigType("env")   // REQUIRED if the config file does not have the extension in the name
-	viper.AddConfigPath("./env") // path to look for the config file in
-	err := viper.ReadInConfig()  // Find and read the config file
-	if err != nil {              // Handle errors reading the config file
+func SetupENV() {
+	viper.SetConfigName("dev")
+	viper.SetConfigType("env")
+	viper.AddConfigPath("./env")
+	err := viper.ReadInConfig()
+	if err != nil {
 		panic(fmt.Errorf("fatal error config file: %w", err))
 	}
-	token := viper.Get("OPENAI_TOKEN")
+}
+
+func GetClient() *openai.Client {
+
+	token := viper.Get("OPENAI_TOKEN").(string)
 	config := openai.DefaultConfig(token)
-	proxyUrl, err := url.Parse("http://127.0.0.1:1095")
-	if err != nil {
-		panic(err)
-	}
-	transport := &http.Transport{
-		Proxy: http.ProxyURL(proxyUrl),
-	}
-	config.HTTPClient = &http.Client{
-		Transport: transport,
+
+	proxy := viper.Get("PROXY")
+	if proxy != nil {
+		proxyUrl, err := url.Parse(proxy.(string))
+		if err != nil {
+			panic(err)
+		}
+		transport := &http.Transport{
+			Proxy: http.ProxyURL(proxyUrl),
+		}
+		config.HTTPClient = &http.Client{
+			Transport: transport,
+		}
 	}
 
 	client := openai.NewClientWithConfig(config)
+	return client
+
+}
+
+func gptRequest(client *openai.Client, content string) (response openai.ChatCompletionResponse, err error) {
 	resp, err := client.CreateChatCompletion(
 		context.Background(),
 		openai.ChatCompletionRequest{
@@ -41,16 +56,48 @@ func main() {
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role:    openai.ChatMessageRoleUser,
-					Content: os.Args[1],
+					Content: content,
 				},
 			},
 		},
 	)
+	return resp, err
+}
+
+func run(content string) {
+	SetupENV()
+	client := GetClient()
+
+	resp, err := gptRequest(client, content)
 
 	if err != nil {
 		fmt.Printf("ChatCompletion error: %v\n", err)
 		return
 	}
-
 	fmt.Println(resp.Choices[0].Message.Content)
+}
+
+func main() {
+
+	var content string
+
+	app := &cli.App{
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:        "content",
+				Value:       "english",
+				Usage:       "content for ChatGPT",
+				Destination: &content,
+			},
+		},
+		Action: func(cCtx *cli.Context) error {
+			run(content)
+			return nil
+		},
+	}
+
+	if err := app.Run(os.Args); err != nil {
+		log.Fatal(err)
+	}
+
 }
